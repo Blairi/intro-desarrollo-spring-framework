@@ -1,0 +1,59 @@
+### Archivos de Java ###
+*.class
+*.log
+*.ctxt
+.mtj.tmp/
+
+### Empaquetados ###
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+### Logs de crash de la Máquina Virtual (JVM) ###
+hs_err_pid*
+replay_pid*
+
+### IntelliJ IDEA / Entorno JetBrains ###
+# Ignorar la carpeta .idea por completo es la práctica más segura para evitar conflictos de usuario
+.idea/
+*.iml
+*.iws
+*.ipr
+# Directorio de salida por defecto de IntelliJ
+out/
+
+### Maven ###
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+# No se recomienda ignorar el wrapper de maven (.mvn/wrapper/maven-wrapper.properties)
+# pero sí su ejecutable binario si prefieres no subirlo:
+# .mvn/wrapper/maven-wrapper.jar
+
+### Gradle ###
+.gradle/
+build/
+# Ignorar archivos locales de Gradle
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+_*/
+
+### Archivos del Sistema Operativo ###
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
