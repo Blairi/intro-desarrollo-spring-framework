@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd">
+    <!-- bean definitions here -->
+    <bean id="empleado" class="dgtic.core.modelo.Empleado">
+        <property name="nombre" value="Rebeca" />
+        <property name="edad" value="34" />
+    </bean>
+
+    <bean id="empleadoDos" class="dgtic.core.modelo.Empleado">
+        <constructor-arg ref="gestionProyectos" />
+    </bean>
+
+    <bean id="empleadoTres" class="dgtic.core.modelo.Empleado">
+        <property name="actividad">
+            <bean class="dgtic.core.modelo.PlanificacionProyectos">
+            </bean>
+        </property>
+    </bean>
+
+    <bean id="empleadoCuatro" class="dgtic.core.modelo.Empleado">
+        <property name="actividad" ref="gestionProyectos"/>
+    </bean>
+
+    <bean name="empleadoCinco" class="dgtic.core.modelo.Empleado">
+        <constructor-arg>
+            <bean class="dgtic.core.modelo.PlanificacionProyectos"></bean>
+        </constructor-arg>
+        <property name="nombre" value="Maria" />
+        <property name="edad" value="45" />
+    </bean>
+
+    <!-- beans -->
+    <bean id="gestionProyectos" class="dgtic.core.modelo.GestionProyectos" />
+    <bean id="intercambioConocimientos" class="dgtic.core.modelo.IntercambioConocimientos" />
+
+</beans>
