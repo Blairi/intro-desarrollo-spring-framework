@@ -15,9 +15,10 @@ comprender los módulos de este repositorio.
 8.  [Ciclo de vida de un bean](#ciclo-de-vida-de-un-bean)
 9.  [Scopes (ámbitos) de beans](#scopes-ámbitos-de-beans)
 10. [Externalización de configuración con @Value](#externalización-de-configuración-con-value)
-11. [Spring Boot y @SpringBootApplication](#spring-boot-y-springbootapplication)
-12. [Resumen visual de las anotaciones principales](#resumen-visual-de-las-anotaciones-principales)
-13. [Cómo se relaciona con este proyecto](#cómo-se-relaciona-con-este-proyecto)
+11. [Acceso a datos con Spring](#acceso-a-datos-con-spring)
+12. [Spring Boot y @SpringBootApplication](#spring-boot-y-springbootapplication)
+13. [Resumen visual de las anotaciones principales](#resumen-visual-de-las-anotaciones-principales)
+14. [Cómo se relaciona con este proyecto](#cómo-se-relaciona-con-este-proyecto)
 
 ---
 
@@ -501,6 +502,436 @@ por defecto: `${EMPLEADO_NOMBRE:ValorPorDefecto}`.
 
 ---
 
+## Acceso a datos con Spring
+
+El acceso a datos es una de las áreas donde Spring más valor aporta.
+Este repositorio contiene módulos que muestran la **evolución progresiva**
+desde JDBC puro hasta JPA con Spring Boot.
+
+```
+  JDBC puro         Spring JDBC              JPA / EntityManager
+  (SQL a pelo)      (JdbcTemplate)           (ORM + JPQL)
+       │                  │                        │
+       ▼                  ▼                        ▼
+    JDBC/             Template/            EntityManager/
+                                                practicauno/
+```
+
+---
+
+### JDBC puro (sin Spring)
+
+El módulo `JDBC` muestra el enfoque clásico previo a Spring:
+
+```java
+// DAO.java: conexión y consulta JDBC manual
+public class DAO {
+    private Connection conexion;
+
+    public DAO() throws ClassNotFoundException, SQLException {
+        Class.forName("org.mariadb.jdbc.Driver");
+        conexion = DriverManager.getConnection(url, usuario, psw);
+    }
+
+    public EntidadAlumno getAlumno(String matricula) {
+        String query = "SELECT * FROM alumnos where matricula=?";
+        PreparedStatement pstm = conexion.prepareStatement(query);
+        pstm.setString(1, matricula);
+        ResultSet datos = pstm.executeQuery();
+        // mapeo manual fila → objeto...
+    }
+
+    public void cerrarConexion() throws SQLException {
+        conexion.close();
+    }
+}
+```
+
+Problemas de este enfoque:
+- **Boilerplate**: try/catch/finally, apertura/cierre de conexión,
+  `PreparedStatement`, `ResultSet`.
+- **Sin pool de conexiones**: cada operación abre y cierra una conexión real.
+- **Excepciones ambiguas**: `SQLException` no distingue entre error de
+  conexión, constraint violation o sintaxis SQL.
+- **Mapeo manual**: cada consulta requiere código para convertir filas a
+  objetos.
+
+---
+
+### Spring JDBC con JdbcTemplate
+
+El módulo `Template` utiliza **Spring Framework 5** (no Boot) con
+`JdbcTemplate` para eliminar el boilerplate del JDBC puro.
+
+#### Configuración del DataSource con HikariCP
+
+```java
+@Configuration
+@ComponentScan("mx.unam.dgtic")
+public class AppConfig {
+
+    @Bean
+    public DataSource dataSource() {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl("jdbc:mariadb://localhost:3306/modulo6");
+        config.setUsername("appuser");
+        config.setPassword("MiPasswordSegura123!");
+        config.setDriverClassName("org.mariadb.jdbc.Driver");
+        return new HikariDataSource(config);
+    }
+
+    @Bean
+    public JdbcTemplate jdbcTemplate(DataSource dataSource) {
+        return new JdbcTemplate(dataSource);
+    }
+}
+```
+
+**HikariCP** es un pool de conexiones de alto rendimiento. En lugar de abrir
+y cerrar una conexión real cada vez, mantiene un conjunto de conexiones
+abiertas reutilizables, lo que mejora drásticamente el rendimiento.
+
+**JdbcTemplate** es la clase central de `spring-jdbc`. Recibe un `DataSource`,
+gestiona el ciclo de vida de la conexión (`Connection`, `PreparedStatement`,
+`ResultSet`) y traduce `SQLException` a la jerarquía
+`DataAccessException` de Spring.
+
+#### Repositorio con JdbcTemplate
+
+```java
+@Repository
+public class UsuarioDao {
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    public Long guardar(Usuario usuario) {
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        String sql = "INSERT INTO usuario (nombre, email, edad) VALUES (?, ?, ?)";
+        jdbcTemplate.update(conexion -> {
+            PreparedStatement psm = conexion.prepareStatement(
+                sql, Statement.RETURN_GENERATED_KEYS);
+            psm.setString(1, usuario.getNombre());
+            psm.setString(2, usuario.getEmail());
+            psm.setInt(3, usuario.getEdad());
+            return psm;
+        }, keyHolder);
+        return keyHolder.getKey().longValue();
+    }
+
+    public List<Usuario> listarTodos() {
+        String sql = "SELECT * FROM usuario";
+        return jdbcTemplate.query(sql, new UsuarioRowMapper());
+    }
+}
+```
+
+`KeyHolder` captura la clave generada automáticamente por la base de datos
+(autoincremental) después de un `INSERT`.
+
+#### RowMapper
+
+`RowMapper` es una interfaz funcional que convierte una fila del
+`ResultSet` en un objeto de dominio:
+
+```java
+public class UsuarioRowMapper implements RowMapper<Usuario> {
+    @Override
+    public Usuario mapRow(ResultSet rs, int rowNum) throws SQLException {
+        Usuario usuario = new Usuario();
+        usuario.setId(rs.getLong("id"));
+        usuario.setNombre(rs.getString("nombre"));
+        usuario.setEmail(rs.getString("email"));
+        usuario.setEdad(rs.getInt("edad"));
+        return usuario;
+    }
+}
+```
+
+Spring llama a `mapRow` por cada fila del resultado y arma la lista
+automáticamente.
+
+#### DataSourceInitializer con schema.sql
+
+```java
+@Bean
+public DataSourceInitializer dataSourceInitializer(DataSource dataSource) {
+    DataSourceInitializer initializer = new DataSourceInitializer();
+    initializer.setDataSource(dataSource);
+    ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
+    populator.addScript(new ClassPathResource("schema.sql"));
+    initializer.setDatabasePopulator(populator);
+    return initializer;
+}
+```
+
+Permite ejecutar scripts SQL (`schema.sql`) al arrancar la aplicación para
+crear o inicializar tablas:
+
+```sql
+DROP TABLE IF EXISTS usuario;
+CREATE TABLE usuario (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    edad INT
+);
+```
+
+**Nota**: `ServicioUsuario` en este módulo crea manualmente el contexto de
+Spring con `new AnnotationConfigApplicationContext(AppConfig.class)` y
+obtiene los beans con `context.getBean(...)`. No tiene anotaciones Spring
+porque actúa como bootstrap manual, no como un bean gestionado.
+
+---
+
+### JPA con EntityManager
+
+Los módulos `EntityManager` y `practicauno` usan **Spring Boot 3.5 + JPA**
+con la API de `EntityManager` (no Spring Data JPA) para realizar operaciones
+de persistencia.
+
+#### Diferencia clave: JDBC vs JPA
+
+| Aspecto | JDBC / JdbcTemplate | JPA / EntityManager |
+|---|---|---|
+| **Modelo** | SQL puro (tablas → filas) | ORM (objetos ↔ tablas) |
+| **Mapeo** | Manual con `RowMapper` | Automático con anotaciones `@Entity` |
+| **Consultas** | SQL nativo (`SELECT * FROM...`) | JPQL (`SELECT u FROM Usuario u...`) |
+| **Transacciones** | Manuales (`connection.commit()`) | Automáticas con `@Transactional` |
+| **Cache** | Ninguno | Cache de primer nivel (persistence context) |
+| **Cambio de BD** | Posible pero trabajoso | Transparente (cambia dialecto y driver) |
+
+#### Configuración JPA con @Configuration
+
+```java
+@Configuration
+@ComponentScan("mx.unam.dgtic")
+public class AppConfig {
+
+    @Bean
+    public DataSource dataSource() {
+        HikariConfig config = new HikariConfig();
+        // ... mismo que en Template
+        return new HikariDataSource(config);
+    }
+
+    @Bean
+    LocalContainerEntityManagerFactoryBean entityManagerFactory(DataSource dataSource) {
+        LocalContainerEntityManagerFactoryBean emfb =
+            new LocalContainerEntityManagerFactoryBean();
+        emfb.setDataSource(dataSource);
+        emfb.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
+        emfb.setPackagesToScan("mx.unam.dgtic");
+        Properties jpaProperties = new Properties();
+        jpaProperties.put("hibernate.dialect",
+            "org.hibernate.dialect.MariaDBDialect");
+        jpaProperties.put("hibernate.hbm2ddl.auto", "create");
+        emfb.setJpaProperties(jpaProperties);
+        return emfb;
+    }
+}
+```
+
+- `LocalContainerEntityManagerFactoryBean` crea el `EntityManagerFactory`
+  de JPA y lo registra como bean en el contenedor de Spring.
+- `HibernateJpaVendorAdapter` configura Hibernate como proveedor JPA.
+- `hibernate.hbm2ddl.auto": "create"` le dice a Hibernate que cree las
+  tablas automáticamente a partir de las entidades anotadas.
+
+#### Entidad JPA
+
+```java
+@Entity
+@Table(name = "productos")
+public class Producto {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id_producto")
+    private Long idProducto;
+
+    @Column(length = 255)
+    private String nombre;
+
+    @Column(precision = 38, scale = 2)
+    private BigDecimal precio;
+
+    @Column
+    private Integer stock;
+
+    @Column(length = 255)
+    private String imagen;
+}
+```
+
+En `practicauno` se usa además **Lombok** para eliminar el boilerplate de
+getters, setters, constructores y `toString`:
+
+```java
+@Entity
+@Table(name = "productos")
+@Getter @Setter
+@NoArgsConstructor @AllArgsConstructor
+@ToString
+public class Producto { ... }
+```
+
+| Anotación JPA | Propósito |
+|---|---|
+| `@Entity` | Marca la clase como entidad JPA (mapeada a una tabla) |
+| `@Table(name = "...")` | Especifica el nombre de la tabla en la BD |
+| `@Id` | Marca el campo como clave primaria |
+| `@GeneratedValue(strategy = ...)` | Estrategia de generación de claves |
+| `@Column(...)` | Configura la columna (nombre, longitud, precisión, etc.) |
+
+#### @PersistenceContext vs @Autowired para EntityManager
+
+```java
+@Repository
+public class UsuarioRepository {
+
+    @PersistenceContext
+    private EntityManager entityManager;
+    // ...
+}
+```
+
+`@PersistenceContext` es la anotación estándar de JPA para inyectar un
+`EntityManager`. A diferencia de `@Autowired`, garantiza que:
+
+1.  El `EntityManager` esté **asociado a la transacción actual**
+    (thread-safe).
+2.  Cada transacción reciba su propia instancia (proxy) que participa en el
+    contexto de persistencia correcto.
+
+Usar `@Autowired` directamente con `EntityManager` no es seguro en
+entornos transaccionales.
+
+#### Operaciones del repositorio
+
+```java
+@Repository
+public class ProductoRepository {
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    // CREATE / UPDATE
+    @Transactional
+    public Producto guardar(Producto producto) {
+        if (producto.getIdProducto() == null) {
+            entityManager.persist(producto);   // INSERT
+            return producto;
+        } else {
+            return entityManager.merge(producto);  // UPDATE
+        }
+    }
+
+    // DELETE por ID
+    @Transactional
+    public void eliminar(Long id) {
+        Producto producto = entityManager.find(Producto.class, id);
+        if (producto != null) {
+            entityManager.remove(producto);
+        }
+    }
+
+    // DELETE con JPQL
+    @Transactional
+    public void eliminarPorNombre(String nombre) {
+        Query query = entityManager.createQuery(
+            "DELETE FROM Producto p WHERE p.nombre=:nombre");
+        query.setParameter("nombre", nombre);
+        query.executeUpdate();
+    }
+
+    // READ por ID
+    public Optional<Producto> buscarPorId(Long id) {
+        Producto producto = entityManager.find(Producto.class, id);
+        return Optional.ofNullable(producto);
+    }
+
+    // READ todos
+    public List<Producto> buscarTodos() {
+        TypedQuery<Producto> query = entityManager.createQuery(
+            "SELECT p FROM Producto p", Producto.class);
+        return query.getResultList();
+    }
+}
+```
+
+#### @Transactional
+
+`@Transactional` delimita una transacción de base de datos. Spring inicia
+una transacción antes del método y la confirma (commit) al finalizar; si
+ocurre una excepción, hace rollback automático. Sin esta anotación, cada
+operación con el `EntityManager` se ejecutaría en una transacción separada.
+
+#### JPQL
+
+JPQL (Java Persistence Query Language) es un lenguaje de consultas similar a
+SQL pero que opera sobre **objetos** (entidades) en lugar de tablas:
+
+```sql
+-- SQL:        SELECT * FROM productos WHERE nombre LIKE '%Lap%'
+-- JPQL:       SELECT p FROM Producto p WHERE p.nombre LIKE :nombre
+```
+
+Ventajas de JPQL:
+- Independiente de la base de datos (el dialecto se traduce automáticamente).
+- Trabaja con objetos, no con filas.
+- Soporta joins, subconsultas, funciones de agregación.
+
+El `p` en `SELECT p FROM Producto p` es un **alias** que representa cada
+instancia de la entidad `Producto`.
+
+#### Criteria API
+
+La Criteria API permite construir consultas de forma **programática** (con
+objetos Java) en lugar de cadenas JPQL:
+
+```java
+public List<Producto> buscarPorCriterios(
+        String nombre, BigDecimal precioMin, BigDecimal precioMax) {
+
+    var cb = entityManager.getCriteriaBuilder();
+    var query = cb.createQuery(Producto.class);
+    var root = query.from(Producto.class);
+    var predicate = cb.conjunction();  // predicado base: siempre verdadero
+
+    if (nombre != null && !nombre.isEmpty()) {
+        predicate = cb.and(predicate,
+            cb.like(root.get("nombre"), "%" + nombre + "%"));
+    }
+    if (precioMin != null) {
+        predicate = cb.and(predicate,
+            cb.greaterThanOrEqualTo(root.get("precio"), precioMin));
+    }
+    if (precioMax != null) {
+        predicate = cb.and(predicate,
+            cb.lessThanOrEqualTo(root.get("precio"), precioMax));
+    }
+
+    query.select(root).where(predicate);
+    return entityManager.createQuery(query).getResultList();
+}
+```
+
+Esto genera dinámicamente una consulta del tipo:
+
+```sql
+SELECT p FROM Producto p
+WHERE p.nombre LIKE '%Lap%'
+  AND p.precio >= 300
+  AND p.precio <= 20000
+```
+
+La Criteria API es útil cuando los filtros de búsqueda son opcionales y
+desconocidos en tiempo de compilación.
+
+---
+
 ## Spring Boot y @SpringBootApplication
 
 ### @SpringBootApplication
@@ -617,6 +1048,10 @@ siguiente tabla muestra qué concepto cubre cada módulo:
 | `m5integrador` | Spring Boot: @Component, @Service, @Value, @PostConstruct, @PreDestroy |
 | `m5demoweb` | Spring Boot + MVC: @Controller, @GetMapping, Thymeleaf |
 | `sispro3d` | Spring Boot + Lombok: @Data, @Value masivo |
+| `JDBC` | JDBC puro (sin Spring): DriverManager, PreparedStatement |
+| `Template` | Spring JDBC 5: @Configuration, JdbcTemplate, RowMapper, HikariCP |
+| `EntityManager` | Spring Boot + JPA: @Entity, EntityManager, JPQL, Criteria API |
+| `practicauno` | Spring Boot + JPA + Lombok: EntityManager, CRUD de productos |
 
 ---
 
